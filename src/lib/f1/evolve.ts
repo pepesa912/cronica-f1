@@ -1,4 +1,5 @@
 import { CIRCUITS, raceTitle } from "./circuits";
+import { DEATHS } from "./exits";
 import { materialize } from "./grid";
 import { personName, pickNat, teamName } from "./names";
 import {
@@ -48,6 +49,9 @@ export function buildNext(input: {
   const followDrivers = input.options.drivers === "historico" && Boolean(real);
   const followCircuits = input.options.circuits === "real" && Boolean(real);
 
+  const followSignings = input.options.signings === "historico" && Boolean(real);
+  const followExits = input.options.retirements === "historico";
+
   const log: string[] = [];
   if (pastArchive) {
     log.push("No hay más archivo: desde este año la parrilla, el calendario y el reglamento siguen con las reglas de la crónica.");
@@ -72,12 +76,61 @@ export function buildNext(input: {
   let retired = [...input.retired];
   let drivers: DriverState[];
 
-  if (followDrivers && followTeams) {
-    drivers = real!.drivers.map((driver) => ({ ...driver }));
+  const exitNote = noteExits({
+    year,
+    pool,
+    retired,
+    prev: input.prev,
+    real,
+    followExits,
+  });
+  pool = exitNote.pool;
+  retired = exitNote.retired;
+  log.push(...exitNote.lines);
+
+  if (followDrivers && real) {
+    for (const driver of real.drivers) {
+      if (retired.includes(driver.id)) continue;
+      if (!pool.some((item) => item.id === driver.id)) pool.push({ ...driver });
+    }
+  }
+
+  const blocked = exitNote.blocked;
+
+  if (!followExits && followSignings) {
+    for (const driver of pool) {
+      if (driver.retired || blocked.has(driver.id)) continue;
+      const age = year - driver.born;
+      const star = driver.peak >= 95;
+      if (age >= 46 || (age >= 42 && rng.chance(star ? 0.28 : 0.62)) || (age >= 38 && !star && rng.chance(0.2))) {
+        driver.retired = true;
+        retired.push(driver.id);
+        if (input.prev.drivers.some((item) => item.id === driver.id)) log.push(`${driver.name} cuelga el casco.`);
+      }
+    }
+  }
+
+  if (followDrivers && followTeams && followSignings && followExits) {
+    drivers = real!.drivers.filter((driver) => !retired.includes(driver.id) && !blocked.has(driver.id)).map((driver) => ({ ...driver }));
+    const ids = new Set(drivers.map((driver) => driver.id));
+    for (const team of teams) {
+      const historical = real!.teams.find((item) => item.id === team.id);
+      team.drivers = (historical?.drivers ?? team.drivers).filter((id) => ids.has(id));
+    }
     pool = mergePool(pool, drivers);
     log.push(...driverLines(input.prev, drivers, teams));
-  } else if (followDrivers && real) {
-    const placed = seatHistorical(real, teams, pool, year, rng);
+  } else if (followSignings && real) {
+    const placed = seatHistorical(
+      real,
+      teams,
+      pool,
+      blocked,
+      year,
+      rng,
+      input.options.drivers === "academia",
+      !followExits,
+      input.prev,
+    );
     teams = placed.teams;
     drivers = placed.drivers;
     pool = placed.pool;
@@ -88,9 +141,11 @@ export function buildNext(input: {
       teams,
       pool,
       retired,
+      blocked,
       year,
       rng,
-      realDrivers: followDrivers ? real : null,
+      academy: input.options.drivers === "academia" || !real,
+      honorArchive: followExits && Boolean(real),
     });
     teams = placed.teams;
     drivers = placed.drivers;
@@ -128,7 +183,7 @@ export function buildNext(input: {
       teams,
       drivers,
       races,
-      changelog: log.filter(Boolean).slice(0, 16),
+      changelog: [...log.filter((line) => line.includes("fallece")), ...log.filter((line) => line && !line.includes("fallece"))].slice(0, 18),
     },
     pool,
     retired,
@@ -273,14 +328,49 @@ function spawnTeam(existing: Set<string>, grid: TeamState[], rng: Rng, year: num
   };
 }
 
+function noteExits(input: {
+  year: number;
+  pool: DriverState[];
+  retired: string[];
+  prev: SimulatedSeason;
+  real: SeasonDraft | null;
+  followExits: boolean;
+}): { pool: DriverState[]; retired: string[]; blocked: Set<string>; lines: string[] } {
+  const pool = input.pool.map((driver) => ({ ...driver }));
+  const retired = new Set(input.retired);
+  const blocked = new Set<string>();
+  const lines: string[] = [];
+  const previous = new Set(input.prev.teams.flatMap((team) => team.drivers));
+  const allowed = new Set(input.real?.drivers.map((driver) => driver.id) ?? []);
+
+  for (const driver of pool) {
+    if (driver.generated) continue;
+    const died = DEATHS[driver.id];
+    if (input.followExits && died != null && died < input.year) {
+      if (!driver.retired && previous.has(driver.id)) lines.push(`${driver.name} fallece. No vuelve a largar.`);
+      driver.retired = true;
+      retired.add(driver.id);
+      continue;
+    }
+    if (input.followExits && input.real && !allowed.has(driver.id)) {
+      blocked.add(driver.id);
+      if (previous.has(driver.id) && !driver.retired) lines.push(`${driver.name} se retira.`);
+    }
+  }
+
+  return { pool, retired: [...retired], blocked, lines };
+}
+
 function marketDrivers(input: {
   prev: SimulatedSeason;
   teams: TeamState[];
   pool: DriverState[];
   retired: string[];
+  blocked: Set<string>;
   year: number;
   rng: Rng;
-  realDrivers: SeasonDraft | null;
+  academy: boolean;
+  honorArchive: boolean;
 }): { teams: TeamState[]; drivers: DriverState[]; pool: DriverState[]; retired: string[]; lines: string[] } {
   const lines: string[] = [];
   const retired = new Set(input.retired);
@@ -288,10 +378,14 @@ function marketDrivers(input: {
   const aliveTeams = new Set(input.teams.map((team) => team.id));
 
   for (const driver of poolMap.values()) {
-    if (driver.retired || retired.has(driver.id)) continue;
+    if (driver.retired || retired.has(driver.id) || input.blocked.has(driver.id)) continue;
+    if (input.honorArchive && !driver.generated) {
+      driver.contract = Math.max(0, driver.contract - 1);
+      continue;
+    }
     const age = input.year - driver.born;
     const star = driver.peak >= 95;
-    if (age >= 45 || (age >= 42 && input.rng.chance(star ? 0.35 : 0.62)) || (age >= 38 && !star && input.rng.chance(0.22))) {
+    if (age >= 46 || (age >= 42 && input.rng.chance(star ? 0.28 : 0.62)) || (age >= 38 && !star && input.rng.chance(0.2))) {
       driver.retired = true;
       retired.add(driver.id);
       lines.push(`${driver.name} cuelga el casco.`);
@@ -301,14 +395,17 @@ function marketDrivers(input: {
     }
   }
 
-  for (const driver of Object.values(DRIVERS)) {
-    const age = input.year - driver.born;
-    if (age < 19 || age > 21 || poolMap.has(driver.id) || retired.has(driver.id)) continue;
-    poolMap.set(driver.id, makeDriver(driver.id));
-  }
-  for (let i = 0; i < 2; i++) {
-    const rookie = fictionalDriver(input.year, input.rng, poolMap);
-    poolMap.set(rookie.id, rookie);
+  if (input.academy) {
+    for (const driver of Object.values(DRIVERS)) {
+      const age = input.year - driver.born;
+      if (age < 19 || age > 21 || poolMap.has(driver.id) || retired.has(driver.id)) continue;
+      if (input.honorArchive && input.blocked.has(driver.id)) continue;
+      poolMap.set(driver.id, makeDriver(driver.id));
+    }
+    for (let i = 0; i < 2; i++) {
+      const rookie = fictionalDriver(input.year, input.rng, poolMap);
+      poolMap.set(rookie.id, rookie);
+    }
   }
 
   const previous = new Map<string, string>();
@@ -319,7 +416,7 @@ function marketDrivers(input: {
   const locked = new Map<string, string>();
   for (const [id, teamId] of previous) {
     const driver = poolMap.get(id);
-    if (!driver || driver.retired || !aliveTeams.has(teamId)) continue;
+    if (!driver || driver.retired || input.blocked.has(id) || !aliveTeams.has(teamId)) continue;
     if (driver.contract > 0 && input.rng.chance(0.72)) locked.set(id, teamId);
   }
 
@@ -327,22 +424,26 @@ function marketDrivers(input: {
     team.drivers = [...locked.entries()].filter(([, teamId]) => teamId === team.id).map(([id]) => id);
   }
 
-  const cap = 2;
+  const cap = input.year < 1961 ? 3 : 2;
   const open: string[] = [];
   for (const team of prestigeOrder(input.teams)) {
-    while (team.drivers.length < cap) open.push(team.id);
+    const seats = Math.max(0, cap - team.drivers.length);
+    for (let s = 0; s < seats; s++) open.push(team.id);
   }
 
-  const free = [...poolMap.values()].filter(
-    (driver) => !driver.retired && !locked.has(driver.id) && input.year - driver.born >= 18 && input.year - driver.born <= 44,
-  );
-  free.sort((a, b) => scout(b, input.year, input.rng) - scout(a, input.year, input.rng));
+  const free = [...poolMap.values()].filter((driver) => {
+    if (driver.retired || input.blocked.has(driver.id) || locked.has(driver.id)) return false;
+    const age = input.year - driver.born;
+    return age >= 18 && age <= 46;
+  });
+  const scored = free.map((driver) => ({ driver, score: scout(driver, input.year, input.rng) }));
+  scored.sort((a, b) => b.score - a.score);
 
   const prestige = new Map(input.teams.map((team) => [team.id, team.pace * 0.65 + team.budget * 0.35]));
   const openSeats = [...open].sort((a, b) => (prestige.get(b) ?? 0) - (prestige.get(a) ?? 0));
-  for (const driver of free) {
+  for (const { driver, score } of scored) {
     if (!openSeats.length) break;
-    if (scout(driver, input.year, input.rng) < 60 && input.rng.chance(0.35)) continue;
+    if (score < 60 && input.rng.chance(0.35)) continue;
     const teamId = openSeats.shift();
     if (!teamId) break;
     const team = input.teams.find((item) => item.id === teamId);
@@ -373,7 +474,7 @@ function marketDrivers(input: {
   return {
     teams: input.teams,
     drivers,
-    pool: [...poolMap.values()].filter((driver) => !driver.retired || seatedIds.has(driver.id)).slice(-160),
+    pool: [...poolMap.values()].filter((driver) => !driver.retired || seatedIds.has(driver.id)).slice(-180),
     retired: [...retired],
     lines,
   };
@@ -412,49 +513,80 @@ function seatHistorical(
   real: SeasonDraft,
   teams: TeamState[],
   pool: DriverState[],
+  blocked: Set<string>,
   year: number,
   rng: Rng,
+  academy: boolean,
+  keepSurvivors: boolean,
+  prev: SimulatedSeason,
 ): { teams: TeamState[]; drivers: DriverState[]; pool: DriverState[]; lines: string[] } {
   const lines: string[] = [];
-  const poolMap = new Map(pool.map((driver) => [driver.id, driver]));
+  const poolMap = new Map(pool.map((driver) => [driver.id, { ...driver }]));
+  const retired = new Set(pool.filter((driver) => driver.retired).map((driver) => driver.id));
   for (const team of teams) team.drivers = [];
-  const wanted = real.teams.flatMap((team) =>
-    team.drivers.map((id) => ({ id, teamId: team.id, skill: rated(makeDriver(id), year).race })),
-  );
-  const alive = new Set(teams.map((team) => team.id));
   const seated = new Set<string>();
-  for (const seat of wanted) {
-    if (!alive.has(seat.teamId) || seated.has(seat.id)) continue;
-    const team = teams.find((item) => item.id === seat.teamId);
-    if (!team || team.drivers.length >= 2) continue;
-    team.drivers.push(seat.id);
-    seated.add(seat.id);
-    ensure(poolMap, seat.id);
+  const alive = new Set(teams.map((team) => team.id));
+
+  for (const historical of real.teams) {
+    if (!alive.has(historical.id)) continue;
+    const team = teams.find((item) => item.id === historical.id);
+    if (!team) continue;
+    for (const id of historical.drivers) {
+      if (seated.has(id) || blocked.has(id) || retired.has(id)) continue;
+      if ((DEATHS[id] ?? 9999) < year) continue;
+      team.drivers.push(id);
+      seated.add(id);
+      ensure(poolMap, id);
+    }
   }
-  const leftovers = wanted.filter((seat) => !seated.has(seat.id)).sort((a, b) => b.skill - a.skill);
-  const prestige = prestigeOrder(teams);
+
+  const leftovers = real.teams.flatMap((team) =>
+    team.drivers
+      .filter((id) => !seated.has(id) && !blocked.has(id) && !retired.has(id) && (DEATHS[id] ?? 9999) >= year)
+      .map((id) => ({ id, teamId: team.id, skill: rated(ensure(poolMap, id), year).race })),
+  );
+  leftovers.sort((a, b) => b.skill - a.skill);
+  const cap = year < 1961 ? 3 : 2;
   for (const seat of leftovers) {
-    const team = prestige.find((item) => item.drivers.length < 2);
+    const team =
+      (alive.has(seat.teamId) ? teams.find((item) => item.id === seat.teamId && item.drivers.length < cap) : undefined) ??
+      prestigeOrder(teams).find((item) => item.drivers.length < cap);
     if (!team) {
       const profile = DRIVERS[seat.id];
-      lines.push(`${profile?.name ?? seat.id} se queda sin butaca.`);
+      if (profile) lines.push(`${profile.name} se queda sin butaca.`);
       continue;
     }
     team.drivers.push(seat.id);
     seated.add(seat.id);
     ensure(poolMap, seat.id);
-    if (seat.teamId !== team.id) {
-      lines.push(`${DRIVERS[seat.id]?.name ?? seat.id} no encuentra a su equipo y ficha por ${team.name}.`);
+    if (seat.teamId !== team.id) lines.push(`${DRIVERS[seat.id]?.name ?? seat.id} no encuentra a su equipo y ficha por ${team.name}.`);
+  }
+
+  if (keepSurvivors) {
+    for (const old of prev.teams) {
+      const team = teams.find((item) => item.id === old.id);
+      if (!team) continue;
+      for (const id of old.drivers) {
+        if (seated.has(id) || blocked.has(id)) continue;
+        const driver = poolMap.get(id);
+        if (!driver || driver.retired) continue;
+        if (team.drivers.length >= 4) continue;
+        team.drivers.push(id);
+        seated.add(id);
+      }
     }
   }
+
   for (const team of teams) {
-    while (team.drivers.length < 2) {
+    const target = Math.max(1, Math.min(cap, team.drivers.length || (academy ? cap : 1)));
+    while (team.drivers.length < target) {
       const rookie = fictionalDriver(year, rng, poolMap);
       poolMap.set(rookie.id, rookie);
       team.drivers.push(rookie.id);
       lines.push(`Asiento libre en ${team.name}: debuta ${rookie.name}.`);
     }
   }
+
   const ids = new Set(teams.flatMap((team) => team.drivers));
   return {
     teams,
@@ -464,8 +596,12 @@ function seatHistorical(
   };
 }
 
-function ensure(pool: Map<string, DriverState>, id: string) {
-  if (!pool.has(id)) pool.set(id, makeDriver(id));
+function ensure(pool: Map<string, DriverState>, id: string): DriverState {
+  const existing = pool.get(id);
+  if (existing) return existing;
+  const driver = makeDriver(id);
+  pool.set(id, driver);
+  return driver;
 }
 
 function prestigeOrder(teams: TeamState[]): TeamState[] {
@@ -492,10 +628,16 @@ function evolveCalendar(prev: RaceSlot[], year: number, rules: RuleSet, rng: Rng
     used.add(circuit.id);
     kept.push({ circuitId: circuit.id, gp: circuit.gp, sprint: false });
   }
-  while (kept.length > target) {
+  let guard = 0;
+  while (kept.length > target && guard < 80) {
+    guard += 1;
     const index = rng.int(kept.length);
-    if (["monaco", "monza"].includes(kept[index].circuitId) && rng.chance(0.7)) continue;
-    kept.splice(index, 1);
+    const sticky = ["monaco", "monza"].includes(kept[index].circuitId);
+    if (sticky && kept.some((race, i) => i !== index && !["monaco", "monza"].includes(race.circuitId)) && rng.chance(0.7)) {
+      continue;
+    }
+    const [gone] = kept.splice(index, 1);
+    used.delete(gone.circuitId);
   }
   kept.sort((a, b) => (CIRCUITS[a.circuitId]?.tour ?? 50) - (CIRCUITS[b.circuitId]?.tour ?? 50));
   if (rules.sprintPoints) {
@@ -528,9 +670,6 @@ function driverLines(prev: SimulatedSeason, drivers: DriverState[], teams: TeamS
   for (const [id, team] of after) {
     if (!before.has(id)) lines.push(`Entra ${names.get(id) ?? id} (${team}).`);
     else if (before.get(id) !== team) lines.push(`${names.get(id) ?? id} pasa de ${before.get(id)} a ${team}.`);
-  }
-  for (const [id] of before) {
-    if (!after.has(id)) lines.push(`${names.get(id) ?? id} sale de la parrilla.`);
   }
   if (lines.length > 8) return [...lines.slice(0, 7), `Y ${lines.length - 7} movimientos más de pilotos.`];
   return lines;

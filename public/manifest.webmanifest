@@ -1,17 +1,16 @@
 {
-  "name": "CRÓNICA — Simulador histórico de Fórmula 1",
+  "name": "CRÓNICA — Simulador de Fórmula 1",
   "short_name": "CRÓNICA",
-  "description": "Crea tu propia línea temporal de la Fórmula 1 desde 1950.",
+  "description": "Simulador de temporadas de Fórmula 1 desde 1950.",
   "start_url": "/",
-  "scope": "/",
   "display": "standalone",
   "background_color": "#12110e",
   "theme_color": "#12110e",
   "icons": [
     {
-      "src": "/icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
       "purpose": "any"
     }
   ]

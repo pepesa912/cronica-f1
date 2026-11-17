@@ -12,6 +12,8 @@ export const DEFAULT_OPTIONS: Options = {
   teams: "historico",
   drivers: "historico",
   circuits: "real",
+  signings: "historico",
+  retirements: "historico",
 };
 
 type Store = {
@@ -67,6 +69,9 @@ export const useCronica = create<Store>((set, get) => ({
       if (raw) {
         const campaign = JSON.parse(raw) as Campaign;
         if (campaign?.pending || campaign?.seasons?.length) {
+          campaign.options = { ...DEFAULT_OPTIONS, ...campaign.options };
+          campaign.pending = campaign.pending ?? null;
+          campaign.retired = campaign.retired ?? [];
           set({ campaign, ready: true });
           return;
         }

@@ -1,76 +1,838 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import {
-  ArrowRight,
-  CalendarDays,
-  Flag,
-  Gauge,
-  History,
-  Play,
-  RotateCcw,
-  Settings2,
-  ShieldCheck,
-  Trophy,
-  Users,
-  X,
-} from "lucide-react";
-import { FIRST_YEAR, LAST_HISTORY, SEASONS } from "@/lib/f1/seasons";
-import { useCronica, DEFAULT_OPTIONS } from "@/lib/f1/store";
-import { constructorStandings, driverStandings } from "@/lib/f1/simulate";
-import type { Options, SimulatedSeason } from "@/lib/f1/types";
+import { useEffect, useMemo, useState } from "react";
+import { CIRCUITS, raceTitle } from "@/lib/f1/circuits";
+import { materialize } from "@/lib/f1/grid";
+import { assignNumbers, chronicle, constructorStandings, driverStandings } from "@/lib/f1/simulate";
+import { rated } from "@/lib/f1/people";
+import { describeDrop, historicalRules, pointsLabel } from "@/lib/f1/rules";
+import { FIRST_YEAR, LAST_HISTORY } from "@/lib/f1/seasons";
+import { DEFAULT_OPTIONS, useCronica } from "@/lib/f1/store";
+import type { ClassifiedRow, Options, SeasonDraft, SimulatedSeason } from "@/lib/f1/types";
 
-const YEARS = Array.from({ length: LAST_HISTORY - FIRST_YEAR + 1 }, (_, i) => LAST_HISTORY - i)
-  .filter((year) => Boolean(SEASONS[year]));
+const PRESETS: [number, string][] = [
+  [1950, "El arranque"],
+  [1967, "El DFV"],
+  [1976, "Lauda y Hunt"],
+  [1988, "McLaren-Honda"],
+  [1994, "Tras Imola"],
+  [2000, "Ferrari"],
+  [2009, "Brawn"],
+  [2014, "El híbrido"],
+  [2021, "El duelo"],
+  [2026, "Once equipos"],
+];
 
-function Panel({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <section className={`rounded-xl border border-white/10 bg-[#1b1a18] ${className}`}>{children}</section>;
+type Tab = "pilotos" | "constructores" | "carreras" | "parrilla";
+
+function optionLine(options: Options): string {
+  return [
+    options.regs === "historico" ? "Reglamento de archivo" : "Reglamento alternativo",
+    options.teams === "historico" ? "Escuderías de archivo" : "Mercado de escuderías",
+    options.drivers === "historico" ? "Pilotos de archivo" : "Academia",
+    options.signings === "historico" ? "Fichajes de archivo" : "Fichajes simulados",
+    options.retirements === "historico" ? "Retiros de archivo" : "Retiros simulados",
+    options.circuits === "real" ? "Circuitos de archivo" : "Calendario vivo",
+  ].join(" · ");
 }
 
-function Eyebrow({ children }: { children: ReactNode }) {
-  return <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#a59b8e]">{children}</p>;
+export function CronicaApp() {
+  const ready = useCronica((state) => state.ready);
+  const campaign = useCronica((state) => state.campaign);
+  const hydrate = useCronica((state) => state.hydrate);
+
+  useEffect(() => {
+    hydrate();
+  }, [hydrate]);
+
+  if (!ready) return <Splash />;
+  if (!campaign) return <Cover />;
+  return <Book />;
 }
 
-function Stat({ label, value, icon: Icon }: { label: string; value: string | number; icon: typeof Trophy }) {
+function Splash() {
   return (
-    <div className="flex items-center gap-3 rounded-lg border border-white/8 bg-white/[0.025] p-3">
-      <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-[#e10600]/12 text-[#ff514b]"><Icon size={17} /></span>
-      <div className="min-w-0">
-        <p className="text-[10px] uppercase tracking-[0.14em] text-[#8e867b]">{label}</p>
-        <p className="truncate text-lg font-semibold text-[#f4efe6]">{value}</p>
+    <main className="flex min-h-screen flex-col justify-end bg-bg px-6 py-16">
+      <p className="text-sm uppercase tracking-widest text-muted">Anuario de Fórmula 1</p>
+      <h1 className="font-display text-6xl leading-none">CRÓNICA</h1>
+    </main>
+  );
+}
+
+function Cover() {
+  const start = useCronica((state) => state.start);
+  const [year, setYear] = useState(2026);
+  const [options, setOptions] = useState<Options>(DEFAULT_OPTIONS);
+  const [seedText, setSeedText] = useState("");
+  const draft = useMemo(() => materialize(year), [year]);
+  const rules = historicalRules(year);
+  const lead = [...draft.teams].sort((a, b) => b.pace - a.pace).slice(0, 4);
+
+  function patch<K extends keyof Options>(key: K, value: Options[K]) {
+    setOptions((current) => ({ ...current, [key]: value }));
+  }
+
+  return (
+    <div className="min-h-screen bg-bg text-fg">
+      <header className="border-b border-line px-4 py-4">
+        <div className="mx-auto flex max-w-5xl items-end justify-between gap-4">
+          <div>
+            <p className="text-sm uppercase tracking-widest text-muted">Anuario de Fórmula 1</p>
+            <h1 className="font-display text-4xl leading-none">CRÓNICA</h1>
+          </div>
+          <p className="text-sm text-muted">
+            {FIRST_YEAR}–{LAST_HISTORY}
+          </p>
+        </div>
+      </header>
+      <main className="mx-auto grid max-w-5xl gap-8 px-4 py-8 lg:grid-cols-2">
+        <section>
+          <p className="text-sm uppercase tracking-widest text-muted">Año de partida</p>
+          <p className="font-display text-6xl leading-none sm:text-8xl">{year}</p>
+          <div className="mt-4 flex items-center gap-3">
+            <button type="button" className="min-h-11 min-w-11 border border-line bg-surface px-3" onClick={() => setYear((value) => Math.max(FIRST_YEAR, value - 1))}>
+              −
+            </button>
+            <input
+              className="w-full accent-accent"
+              type="range"
+              min={FIRST_YEAR}
+              max={LAST_HISTORY}
+              value={year}
+              onChange={(event) => setYear(Number(event.target.value))}
+              aria-label="Año de partida"
+            />
+            <button type="button" className="min-h-11 min-w-11 border border-line bg-surface px-3" onClick={() => setYear((value) => Math.min(LAST_HISTORY, value + 1))}>
+              +
+            </button>
+          </div>
+          <h2 className="mt-6 font-display text-3xl leading-tight">{rules.name}</h2>
+          <p className="mt-2 max-w-xl text-muted">{rules.note}</p>
+          <p className="mt-4 text-sm uppercase tracking-widest text-muted">
+            {draft.teams.length} escuderías · {draft.drivers.length} pilotos · {draft.races.length} carreras
+          </p>
+          <ul className="mt-3 flex flex-wrap gap-2">
+            {lead.map((team) => (
+              <li key={team.id} className="flex items-center gap-2 border border-line bg-surface px-3 py-2">
+                <span className="h-4 w-1" style={{ background: team.color }} />
+                {team.name}
+              </li>
+            ))}
+          </ul>
+          <div className="mt-6 flex flex-wrap gap-2">
+            {PRESETS.map(([preset, label]) => {
+              const on = preset === year;
+              return (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => setYear(preset)}
+                  className={`min-h-11 border px-3 py-2 text-left ${on ? "border-fg bg-fg text-bg" : "border-line bg-surface text-fg"}`}
+                >
+                  <span className={`block text-sm ${on ? "text-bg" : "text-muted"}`}>{label}</span>
+                  <span className="font-semibold">{preset}</span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+        <section className="flex flex-col gap-4">
+          <div>
+            <h2 className="font-display text-3xl">Cómo sigue la crónica</h2>
+            <p className="mt-2 text-muted">
+              El primer año usa la parrilla, el calendario y el reglamento reales. Desde el invierno siguiente, cada interruptor puede seguir el archivo o inventar con criterio. Los resultados nunca se copian de la historia.
+            </p>
+          </div>
+          <Toggle
+            title="Reglamento"
+            help="Puntos, descartes, repostaje, sprints y el paquete técnico."
+            a="Histórico"
+            b="Alternativo"
+            on={options.regs === "historico"}
+            pick={(archive) => patch("regs", archive ? "historico" : "alternativo")}
+          />
+          <Toggle
+            title="Escuderías"
+            help="Quién entra, quién cierra y con qué coche."
+            a="Históricas"
+            b="Mercado"
+            on={options.teams === "historico"}
+            pick={(archive) => patch("teams", archive ? "historico" : "mercado")}
+          />
+          <Toggle
+            title="Pilotos"
+            help="Los nombres de la parrilla: el archivo, o una academia que inventa debutantes."
+            a="Históricos"
+            b="Academia"
+            on={options.drivers === "historico"}
+            pick={(archive) => patch("drivers", archive ? "historico" : "academia")}
+          />
+          <Toggle
+            title="Fichajes"
+            help="De archivo: cada piloto va al equipo que le tocó, si ese equipo sigue. Simulados: deciden los contratos."
+            a="De archivo"
+            b="Simulados"
+            on={options.signings === "historico"}
+            pick={(archive) => patch("signings", archive ? "historico" : "simulado")}
+          />
+          <Toggle
+            title="Retiros"
+            help="De archivo: se van, vuelven o fallecen cuando ocurrió. Una muerte saca al piloto desde la temporada siguiente. Simulados: solo cuentan la edad y la forma."
+            a="De archivo"
+            b="Simulados"
+            on={options.retirements === "historico"}
+            pick={(archive) => patch("retirements", archive ? "historico" : "simulado")}
+          />
+          <Toggle
+            title="Circuitos"
+            help="El calendario publicado, o uno que conserva los clásicos y mueve el resto."
+            a="Reales"
+            b="Vivo"
+            on={options.circuits === "real"}
+            pick={(archive) => patch("circuits", archive ? "real" : "vivo")}
+          />
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="min-h-11 border border-line px-3" onClick={() => setOptions(DEFAULT_OPTIONS)}>
+              Todo el archivo
+            </button>
+            <button
+              type="button"
+              className="min-h-11 border border-line px-3"
+              onClick={() =>
+                setOptions({
+                  regs: "alternativo",
+                  teams: "mercado",
+                  drivers: "academia",
+                  circuits: "vivo",
+                  signings: "simulado",
+                  retirements: "simulado",
+                })
+              }
+            >
+              Modo libre
+            </button>
+          </div>
+          <label className="block text-sm text-muted">
+            Semilla, por si hace falta repetir la misma suerte
+            <input
+              value={seedText}
+              onChange={(event) => setSeedText(event.target.value)}
+              placeholder="Vacío: una crónica nueva"
+              className="mt-1 w-full border border-line bg-surface px-3 py-3 text-fg"
+            />
+          </label>
+          <button type="button" className="min-h-11 bg-accent px-4 text-lg font-bold text-accent-ink" onClick={() => start(year, options, seedText)}>
+            Comenzar en {year}
+          </button>
+        </section>
+      </main>
+    </div>
+  );
+}
+
+function Toggle({
+  title,
+  help,
+  a,
+  b,
+  on,
+  pick,
+}: {
+  title: string;
+  help: string;
+  a: string;
+  b: string;
+  on: boolean;
+  pick: (archive: boolean) => void;
+}) {
+  return (
+    <div>
+      <div className="mb-1 flex items-baseline justify-between gap-3">
+        <h3 className="font-semibold">{title}</h3>
+      </div>
+      <p className="mb-2 text-sm text-muted">{help}</p>
+      <div className="grid grid-cols-2 overflow-hidden rounded-card border border-line">
+        <button type="button" className={`min-h-11 px-3 ${on ? "bg-fg font-semibold text-bg" : "bg-surface text-muted"}`} onClick={() => pick(true)}>
+          {a}
+        </button>
+        <button type="button" className={`min-h-11 px-3 ${!on ? "bg-fg font-semibold text-bg" : "bg-surface text-muted"}`} onClick={() => pick(false)}>
+          {b}
+        </button>
       </div>
     </div>
   );
 }
 
-function StandingTable({ season, constructors = false }: { season: SimulatedSeason; constructors?: boolean }) {
-  const rows = constructors ? constructorStandings(season) ?? [] : driverStandings(season);
+function Book() {
+  const campaign = useCronica((state) => state.campaign);
+  const simulatePending = useCronica((state) => state.simulatePending);
+  const advance = useCronica((state) => state.advance);
+  const reroll = useCronica((state) => state.reroll);
+  const abandon = useCronica((state) => state.abandon);
+  const setOptions = useCronica((state) => state.setOptions);
+  const [focus, setFocus] = useState<number | "pending" | null>(null);
+  const [tab, setTab] = useState<Tab>("pilotos");
+  const [round, setRound] = useState<number | null>(null);
+  const [confirm, setConfirm] = useState<null | "abandon" | "reroll">(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [showMatrix, setShowMatrix] = useState(false);
+  const [showNext, setShowNext] = useState(false);
+  const lastYear = campaign?.seasons.at(-1)?.year ?? campaign?.startYear ?? FIRST_YEAR;
+  const [until, setUntil] = useState(lastYear + 3);
+
+  if (!campaign) return null;
+
+  const picked = typeof focus === "number" ? campaign.seasons.find((season) => season.year === focus) : undefined;
+  const pending = !picked && campaign.pending && (focus === "pending" || focus === null) ? campaign.pending : null;
+  const season = picked ?? (!campaign.pending && focus === null ? campaign.seasons.at(-1) : undefined);
+  const viewYear = pending?.year ?? season?.year ?? lastYear;
+
+  async function playUntil(target: number) {
+    setBusy(true);
+    setError("");
+    try {
+      for (let step = 0; step < 40; step++) {
+        const live = useCronica.getState().campaign;
+        if (!live) break;
+        const done = live.seasons.at(-1)?.year ?? 0;
+        if (!live.pending && done >= target) break;
+        if (live.pending) {
+          if (live.pending.year > target) break;
+          const year = live.pending.year;
+          useCronica.getState().simulatePending();
+          setFocus(year);
+        } else {
+          useCronica.getState().advance();
+          setFocus("pending");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 16));
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "No se pudo simular.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function openRace(next: number) {
+    setTab("carreras");
+    setRound(next);
+  }
+
+  return (
+    <div className="min-h-screen bg-bg text-fg">
+      <header className="sticky top-0 z-10 border-b border-line bg-bg">
+        <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3 px-4 py-3">
+          <div>
+            <p className="text-sm uppercase tracking-widest text-muted">Crónica {campaign.seed}</p>
+            <h1 className="font-display text-3xl leading-none">CRÓNICA</h1>
+          </div>
+          <label className="text-sm text-muted">
+            Temporada
+            <select
+              className="ml-2 min-h-11 border border-line bg-bg px-3 text-fg"
+              value={pending ? "pending" : String(season?.year ?? "")}
+              onChange={(event) => {
+                const value = event.target.value;
+                setRound(null);
+                setConfirm(null);
+                setFocus(value === "pending" ? "pending" : Number(value));
+              }}
+            >
+              {campaign.seasons.map((item) => (
+                <option key={item.year} value={item.year}>
+                  {item.year}
+                </option>
+              ))}
+              {campaign.pending ? <option value="pending">{campaign.pending.year} · sin correr</option> : null}
+            </select>
+          </label>
+        </div>
+      </header>
+      <main className="mx-auto flex min-w-0 max-w-5xl flex-col gap-6 px-4 py-6">
+        <p className="text-sm text-muted">{optionLine(campaign.options)}</p>
+        {viewYear > LAST_HISTORY ? (
+          <p className="border border-line bg-surface px-4 py-3">
+            Desde 2027 no hay archivo. Aunque los interruptores digan histórico, la parrilla sigue con las reglas de esta crónica.
+          </p>
+        ) : null}
+        {pending ? (
+          <DraftView draft={pending} />
+        ) : season ? (
+          <SeasonView
+            season={season}
+            tab={tab}
+            setTab={setTab}
+            round={round}
+            setRound={setRound}
+            showMatrix={showMatrix}
+            setShowMatrix={setShowMatrix}
+            openRace={openRace}
+          />
+        ) : (
+          <p>No hay temporada para mostrar.</p>
+        )}
+
+        <section className="flex flex-col gap-3 border-t border-line pt-4">
+          {campaign.pending ? (
+            <button
+              type="button"
+              disabled={busy}
+              className="min-h-11 bg-accent px-4 text-lg font-bold text-accent-ink disabled:opacity-40"
+              onClick={() => {
+                const year = campaign.pending?.year;
+                setBusy(true);
+                setError("");
+                window.setTimeout(() => {
+                  try {
+                    simulatePending();
+                    if (year) setFocus(year);
+                    setTab("pilotos");
+                    setRound(null);
+                  } catch (caught) {
+                    setError(caught instanceof Error ? caught.message : "No se pudo simular.");
+                  } finally {
+                    setBusy(false);
+                  }
+                }, 30);
+              }}
+            >
+              {busy ? "Simulando…" : `Simular las ${campaign.pending.races.length} carreras de ${campaign.pending.year}`}
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={busy}
+              className="min-h-11 bg-accent px-4 text-lg font-bold text-accent-ink disabled:opacity-40"
+              onClick={() => {
+                setBusy(true);
+                setError("");
+                window.setTimeout(() => {
+                  try {
+                    advance();
+                    setFocus("pending");
+                    setRound(null);
+                  } catch (caught) {
+                    setError(caught instanceof Error ? caught.message : "No se pudo armar el año.");
+                  } finally {
+                    setBusy(false);
+                  }
+                }, 30);
+              }}
+            >
+              {busy ? "Armando…" : `Armar ${lastYear + 1}`}
+            </button>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="text-sm text-muted">
+              Simular hasta
+              <input
+                type="number"
+                className="ml-2 w-24 border border-line bg-surface px-3 py-2 text-fg"
+                min={viewYear}
+                max={viewYear + 40}
+                value={until}
+                onChange={(event) => setUntil(Number(event.target.value))}
+              />
+            </label>
+            <button type="button" disabled={busy || until < viewYear} className="min-h-11 border border-line px-4 disabled:opacity-40" onClick={() => void playUntil(until)}>
+              Correr los años
+            </button>
+          </div>
+          {error ? <p className="border border-line bg-surface px-3 py-2">{error}</p> : null}
+          <div className="flex flex-wrap gap-2">
+            {season ? (
+              <button type="button" className="min-h-11 border border-line px-4" onClick={() => setConfirm("reroll")}>
+                Otra historia de {season.year}
+              </button>
+            ) : null}
+            <button type="button" className="min-h-11 border border-line px-4" onClick={() => setShowNext((value) => !value)}>
+              Interruptores
+            </button>
+            <button type="button" className="min-h-11 border border-line px-4" onClick={() => setConfirm("abandon")}>
+              Nueva crónica
+            </button>
+          </div>
+          {showNext ? (
+            <OptionsEditor
+              options={campaign.options}
+              onChange={(options) => {
+                setOptions(options);
+              }}
+            />
+          ) : null}
+          {confirm === "reroll" && season ? (
+            <Confirm
+              text={
+                campaign.seasons.some((item) => item.year > season.year)
+                  ? `Volver a correr ${season.year} borra las temporadas posteriores. La parrilla se mantiene; cambian los resultados.`
+                  : `Se vuelve a simular ${season.year} con otra suerte. La parrilla no cambia.`
+              }
+              confirmLabel="Correr otra vez"
+              onCancel={() => setConfirm(null)}
+              onConfirm={() => {
+                reroll(season.year);
+                setFocus(season.year);
+                setConfirm(null);
+                setRound(null);
+              }}
+            />
+          ) : null}
+          {confirm === "abandon" ? (
+            <Confirm
+              text="Esta crónica se borra de este navegador. No se puede deshacer."
+              confirmLabel="Borrar"
+              onCancel={() => setConfirm(null)}
+              onConfirm={() => {
+                abandon();
+                setConfirm(null);
+              }}
+            />
+          ) : null}
+        </section>
+        <p className="text-sm text-muted">
+          Los resultados son de esta crónica, no el archivo. Las alineaciones son las de inicio de temporada: no hay sustitutos a mitad de año. Las 500 Millas de Indianápolis, aunque puntuaron hasta 1960, no se corren.
+        </p>
+      </main>
+    </div>
+  );
+}
+
+function Confirm({
+  text,
+  confirmLabel,
+  onCancel,
+  onConfirm,
+}: {
+  text: string;
+  confirmLabel: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="border border-line bg-surface p-4">
+      <p>{text}</p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button type="button" className="min-h-11 border border-line px-4" onClick={onCancel}>
+          Cancelar
+        </button>
+        <button type="button" className="min-h-11 bg-accent px-4 font-bold text-accent-ink" onClick={onConfirm}>
+          {confirmLabel}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function OptionsEditor({ options, onChange }: { options: Options; onChange: (options: Options) => void }) {
+  function patch<K extends keyof Options>(key: K, value: Options[K]) {
+    onChange({ ...options, [key]: value });
+  }
+  return (
+    <div className="grid gap-3 border border-line bg-surface p-4">
+      <p className="text-sm text-muted">Valen para la próxima temporada que se arme, no para la que ya está en pista.</p>
+      <MiniToggle label="Reglamento" a="Histórico" b="Alternativo" on={options.regs === "historico"} pick={(archive) => patch("regs", archive ? "historico" : "alternativo")} />
+      <MiniToggle label="Escuderías" a="Históricas" b="Mercado" on={options.teams === "historico"} pick={(archive) => patch("teams", archive ? "historico" : "mercado")} />
+      <MiniToggle label="Pilotos" a="Históricos" b="Academia" on={options.drivers === "historico"} pick={(archive) => patch("drivers", archive ? "historico" : "academia")} />
+      <MiniToggle label="Fichajes" a="De archivo" b="Simulados" on={options.signings === "historico"} pick={(archive) => patch("signings", archive ? "historico" : "simulado")} />
+      <MiniToggle label="Retiros" a="De archivo" b="Simulados" on={options.retirements === "historico"} pick={(archive) => patch("retirements", archive ? "historico" : "simulado")} />
+      <MiniToggle label="Circuitos" a="Reales" b="Vivo" on={options.circuits === "real"} pick={(archive) => patch("circuits", archive ? "real" : "vivo")} />
+    </div>
+  );
+}
+
+function MiniToggle({
+  label,
+  a,
+  b,
+  on,
+  pick,
+}: {
+  label: string;
+  a: string;
+  b: string;
+  on: boolean;
+  pick: (archive: boolean) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+      <span className="text-sm text-muted sm:w-28">{label}</span>
+      <div className="grid flex-1 grid-cols-2 gap-2">
+        <button type="button" className={`min-h-11 px-2 ${on ? "bg-fg font-semibold text-bg" : "border border-line"}`} onClick={() => pick(true)}>
+          {a}
+        </button>
+        <button type="button" className={`min-h-11 px-2 ${!on ? "bg-fg font-semibold text-bg" : "border border-line"}`} onClick={() => pick(false)}>
+          {b}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function DraftView({ draft }: { draft: SeasonDraft }) {
+  return (
+    <div className="flex flex-col gap-6">
+      <div>
+        <p className="text-sm uppercase tracking-widest text-muted">Por simular</p>
+        <h2 className="font-display text-5xl leading-none">{draft.year}</h2>
+        <p className="mt-3 max-w-2xl font-display text-xl text-muted">{draft.rules.note}</p>
+      </div>
+      <RulesCard draft={draft} />
+      {draft.changelog.length ? (
+        <ul className="list-disc space-y-1 pl-5 text-muted">
+          {draft.changelog.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      ) : null}
+      <GridList year={draft.year} teams={draft.teams} drivers={draft.drivers} />
+      <CalendarList races={draft.races} />
+    </div>
+  );
+}
+
+function RulesCard({ draft }: { draft: SeasonDraft }) {
+  const rules = draft.rules;
+  return (
+    <div className="grid gap-4 border border-line bg-surface p-4 sm:grid-cols-2">
+      <div>
+        <p className="text-sm uppercase tracking-widest text-muted">Fórmula</p>
+        <p>{rules.formula}</p>
+      </div>
+      <div>
+        <p className="text-sm uppercase tracking-widest text-muted">Neumáticos</p>
+        <p>{rules.tyres}</p>
+      </div>
+      <div className="sm:col-span-2">
+        <p className="text-sm uppercase tracking-widest text-muted">Puntos</p>
+        <p>{pointsLabel(rules.points)}</p>
+        <p className="text-muted">{describeDrop(rules.drop, draft.races.length)}</p>
+        {rules.flPoint ? <p className="text-muted">La vuelta rápida suma un punto{rules.flTop10Only ? " si se termina entre los diez" : ""}.</p> : null}
+        {rules.bestCarOnly ? <p className="text-muted">En constructores solo suma el mejor coche de cada carrera.</p> : null}
+        {!rules.constructors ? <p className="text-muted">Todavía no hay campeonato de constructores.</p> : null}
+      </div>
+    </div>
+  );
+}
+
+function GridList({
+  year,
+  teams,
+  drivers,
+}: {
+  year: number;
+  teams: SeasonDraft["teams"];
+  drivers: SeasonDraft["drivers"];
+}) {
+  const byId = new Map(drivers.map((driver) => [driver.id, driver]));
+  return (
+    <section>
+      <h3 className="font-display text-2xl">Parrilla</h3>
+      <p className="mb-3 text-sm text-muted">Alineación de inicio. El número es el ritmo del piloto este año, no un resultado.</p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {teams.map((team) => (
+          <article key={team.id} className="flex overflow-hidden border border-line bg-surface">
+            <div className="w-1 shrink-0" style={{ background: team.color }} />
+            <div className="min-w-0 flex-1 p-3">
+              <div className="flex items-baseline justify-between gap-3">
+                <h4 className="truncate font-semibold">{team.name}</h4>
+                <span className="shrink-0 text-sm text-muted">{team.engineName}</span>
+              </div>
+              <div className="mt-2 h-1.5 bg-surface-2">
+                <div className="h-1.5 bg-fg" style={{ width: `${Math.max(8, Math.min(100, team.pace))}%` }} />
+              </div>
+              <p className="mt-1 text-sm text-muted">
+                Ritmo {Math.round(team.pace)} · Fiabilidad {Math.round(team.rel * 100)}
+              </p>
+              <ul className="mt-2 space-y-1">
+                {team.drivers.map((id) => {
+                  const driver = byId.get(id);
+                  if (!driver) return null;
+                  const skill = rated(driver, year);
+                  return (
+                    <li key={id} className="flex items-baseline justify-between gap-3">
+                      <span className="truncate">
+                        {driver.name} <span className="text-muted">{driver.nat}</span>
+                      </span>
+                      <span className="tabular-nums text-muted">{Math.round(skill.race)}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function CalendarList({ races }: { races: SeasonDraft["races"] }) {
+  return (
+    <section>
+      <h3 className="font-display text-2xl">Calendario</h3>
+      <ol className="mt-3 grid gap-2 sm:grid-cols-2">
+        {races.map((race, index) => {
+          const circuit = CIRCUITS[race.circuitId];
+          return (
+            <li key={`${race.circuitId}-${race.gp}-${index}`} className="flex items-baseline gap-3 border border-line px-3 py-2">
+              <span className="w-6 tabular-nums text-muted">{index + 1}</span>
+              <span className="min-w-0">
+                <span className="block truncate">{raceTitle(race.gp)}</span>
+                <span className="text-sm text-muted">
+                  {circuit?.name ?? race.circuitId}
+                  {circuit ? ` · ${circuit.country}` : ""}
+                  {race.sprint ? " · Sprint" : ""}
+                </span>
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </section>
+  );
+}
+
+function SeasonView({
+  season,
+  tab,
+  setTab,
+  round,
+  setRound,
+  showMatrix,
+  setShowMatrix,
+  openRace,
+}: {
+  season: SimulatedSeason;
+  tab: Tab;
+  setTab: (tab: Tab) => void;
+  round: number | null;
+  setRound: (round: number | null) => void;
+  showMatrix: boolean;
+  setShowMatrix: (value: boolean) => void;
+  openRace: (round: number) => void;
+}) {
+  const drivers = useMemo(() => driverStandings(season), [season]);
+  const makers = useMemo(() => constructorStandings(season), [season]);
+  const numbers = useMemo(() => assignNumbers(season.drivers, season.teams), [season]);
+  const champ = drivers[0];
+  const maker = makers?.[0];
+
+  return (
+    <div className="flex flex-col gap-6">
+      <div>
+        <p className="text-sm uppercase tracking-widest text-muted">Campeón {season.year}</p>
+        <h2 className="font-display text-5xl leading-none">{champ?.name ?? "Sin campeón"}</h2>
+        {champ ? (
+          <p className="mt-2 text-muted">
+            {champ.teamName} · {champ.points} pts · {champ.wins} {champ.wins === 1 ? "victoria" : "victorias"}
+          </p>
+        ) : null}
+        {maker ? (
+          <p className="text-muted">
+            Constructores: {maker.name}, {maker.points} pts
+          </p>
+        ) : null}
+        <p className="mt-3 max-w-2xl font-display text-xl">{chronicle(season)}</p>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {(
+          [
+            ["pilotos", "Pilotos"],
+            ["constructores", "Constructores"],
+            ["carreras", "Carreras"],
+            ["parrilla", "Parrilla"],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            className={`min-h-11 border px-4 ${tab === id ? "border-fg bg-fg font-semibold text-bg" : "border-line"}`}
+            onClick={() => setTab(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {tab === "pilotos" ? (
+        <div className="flex flex-col gap-4">
+          <StandingsTable rows={drivers} kind="driver" />
+          <p className="text-sm text-muted">{describeDrop(season.rules.drop, season.results.length)}</p>
+          <button type="button" className="min-h-11 self-start border border-line px-4" onClick={() => setShowMatrix(!showMatrix)}>
+            {showMatrix ? "Ocultar carrera a carrera" : "Ver carrera a carrera"}
+          </button>
+          {showMatrix ? <Matrix rows={drivers} season={season} openRace={openRace} /> : null}
+        </div>
+      ) : null}
+      {tab === "constructores" ? (
+        makers ? (
+          <div className="flex flex-col gap-3">
+            <StandingsTable rows={makers} kind="team" />
+            {season.rules.bestCarOnly ? <p className="text-sm text-muted">Solo puntúa el mejor coche de cada escudería.</p> : null}
+            <p className="text-sm text-muted">{describeDrop(season.rules.drop, season.results.length)}</p>
+          </div>
+        ) : (
+          <p className="border border-line bg-surface p-4">El campeonato de constructores empieza en 1958.</p>
+        )
+      ) : null}
+      {tab === "carreras" ? <RaceBrowser season={season} numbers={numbers} round={round} setRound={setRound} /> : null}
+      {tab === "parrilla" ? (
+        <div className="flex flex-col gap-6">
+          <RulesCard draft={season} />
+          {season.changelog.length ? (
+            <ul className="list-disc space-y-1 pl-5 text-muted">
+              {season.changelog.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          ) : null}
+          <GridList year={season.year} teams={season.teams} drivers={season.drivers} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function StandingsTable({
+  rows,
+  kind,
+}: {
+  rows: ReturnType<typeof driverStandings>;
+  kind: "driver" | "team";
+}) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[490px] text-left text-sm">
-        <thead className="border-b border-white/10 text-[10px] uppercase tracking-[0.14em] text-[#91887d]">
+      <table className="w-full text-left">
+        <thead className="text-sm uppercase tracking-wide text-muted">
           <tr>
-            <th className="px-3 py-3 font-semibold">Pos.</th>
-            <th className="px-3 py-3 font-semibold">{constructors ? "Equipo" : "Piloto"}</th>
-            <th className="px-3 py-3 text-center font-semibold">Victorias</th>
-            <th className="px-3 py-3 text-center font-semibold">Podios</th>
-            <th className="px-3 py-3 text-right font-semibold">Puntos</th>
+            <th className="py-2 pr-2">Pos</th>
+            <th className="py-2 pr-2">{kind === "driver" ? "Piloto" : "Escudería"}</th>
+            <th className="py-2 pr-2 text-right">Pts</th>
+            <th className="hidden py-2 pr-2 text-right sm:table-cell">V</th>
+            <th className="hidden py-2 pr-2 text-right sm:table-cell">Pod</th>
+            <th className="hidden py-2 pr-2 text-right md:table-cell">Poles</th>
+            <th className="hidden py-2 text-right md:table-cell">VR</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((row, index) => (
-            <tr key={row.id} className="border-b border-white/5 last:border-0 hover:bg-white/[0.025]">
-              <td className="w-12 px-3 py-3 font-mono text-[#958b7f]">{String(index + 1).padStart(2, "0")}</td>
-              <td className="px-3 py-3">
-                <div className="flex items-center gap-2.5">
-                  <span className="h-7 w-1 rounded-full" style={{ backgroundColor: row.color }} />
-                  <div className="min-w-0">
-                    <p className="truncate font-semibold text-[#f3ede3]">{row.name}</p>
-                    <p className="truncate text-xs text-[#8e867b]">{constructors ? row.teamName : row.teamName}</p>
-                  </div>
-                </div>
+            <tr key={row.id} className="border-t border-line">
+              <td className="py-2 pr-2 tabular-nums">{index + 1}</td>
+              <td className="py-2 pr-2">
+                <span className="flex items-start gap-2">
+                  <span className="mt-1 h-4 w-1 shrink-0" style={{ background: row.color }} />
+                  <span>
+                    <span className="block font-semibold">{row.name}</span>
+                    <span className="text-sm text-muted">{kind === "driver" ? row.teamName : row.teamName}</span>
+                  </span>
+                </span>
               </td>
-              <td className="px-3 py-3 text-center tabular-nums text-[#c2b8ab]">{row.wins}</td>
-              <td className="px-3 py-3 text-center tabular-nums text-[#c2b8ab]">{row.podiums}</td>
-              <td className="px-3 py-3 text-right font-mono font-bold tabular-nums text-white">{row.points}</td>
+              <td className="py-2 pr-2 text-right font-semibold tabular-nums" title={row.gross !== row.points ? `${row.gross} brutos` : undefined}>
+                {row.points}
+              </td>
+              <td className="hidden py-2 pr-2 text-right tabular-nums sm:table-cell">{row.wins}</td>
+              <td className="hidden py-2 pr-2 text-right tabular-nums sm:table-cell">{row.podiums}</td>
+              <td className="hidden py-2 pr-2 text-right tabular-nums md:table-cell">{row.poles}</td>
+              <td className="hidden py-2 text-right tabular-nums md:table-cell">{row.fastest}</td>
             </tr>
           ))}
         </tbody>
@@ -79,140 +841,155 @@ function StandingTable({ season, constructors = false }: { season: SimulatedSeas
   );
 }
 
-export function CronicaApp() {
-  const ready = useCronica((state) => state.ready);
-  const campaign = useCronica((state) => state.campaign);
-  const hydrate = useCronica((state) => state.hydrate);
-  const start = useCronica((state) => state.start);
-  const simulatePending = useCronica((state) => state.simulatePending);
-  const advance = useCronica((state) => state.advance);
-  const reroll = useCronica((state) => state.reroll);
-  const abandon = useCronica((state) => state.abandon);
-
-  const [year, setYear] = useState(LAST_HISTORY);
-  const [options, setOptions] = useState<Options>(DEFAULT_OPTIONS);
-  const [seed, setSeed] = useState("");
-  const [showSettings, setShowSettings] = useState(false);
-  const [selectedYear, setSelectedYear] = useState<number | null>(null);
-  const [confirmReset, setConfirmReset] = useState(false);
-
-  useEffect(() => hydrate(), [hydrate]);
-
-  const seasons = campaign?.seasons ?? [];
-  const latest = seasons[seasons.length - 1] ?? null;
-  const pending = campaign?.pending ?? null;
-  const activeSeason = useMemo(
-    () => seasons.find((item) => item.year === (selectedYear ?? latest?.year)) ?? latest,
-    [seasons, selectedYear, latest],
-  );
-  const standings = useMemo(() => activeSeason ? driverStandings(activeSeason) : [], [activeSeason]);
-  const constructors = useMemo(() => activeSeason ? constructorStandings(activeSeason) : null, [activeSeason]);
-  const winner = standings[0];
-
-  if (!ready) {
-    return (
-      <main className="grid min-h-screen place-items-center bg-[#12110e] text-[#f4efe6]">
-        <div className="text-center"><div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-white/15 border-t-[#e10600]" /><Eyebrow>CRÓNICA · ARCHIVO HISTÓRICO</Eyebrow><p className="mt-2 text-sm text-[#a59b8e]">Cargando tu temporada…</p></div>
-      </main>
-    );
-  }
-
-  const updateOption = <K extends keyof Options>(key: K, value: Options[K]) => {
-    setOptions((current) => ({ ...current, [key]: value }));
-  };
-
+function Matrix({
+  rows,
+  season,
+  openRace,
+}: {
+  rows: ReturnType<typeof driverStandings>;
+  season: SimulatedSeason;
+  openRace: (round: number) => void;
+}) {
   return (
-    <main className="min-h-screen bg-[#12110e] text-[#f4efe6]">
-      <header className="border-b border-white/10 bg-[#171613]">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
-          <div className="flex items-center gap-3">
-            <div className="grid size-10 place-items-center rounded-lg bg-[#e10600] text-white"><Flag size={21} fill="currentColor" /></div>
-            <div><p className="font-display text-2xl leading-none tracking-wide">CRÓNICA</p><p className="mt-1 text-[9px] uppercase tracking-[0.24em] text-[#8e867b]">Simulador histórico de Fórmula 1</p></div>
-          </div>
-          <div className="hidden items-center gap-5 text-[10px] uppercase tracking-[0.15em] text-[#a59b8e] sm:flex"><span>1950—2026</span><span className="h-1 w-1 rounded-full bg-[#e10600]"/><span>Tu historia, tus resultados</span></div>
-          {campaign && <button onClick={() => setConfirmReset(true)} className="flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs text-[#b9afa2] transition hover:border-[#e10600]/60 hover:text-white"><RotateCcw size={14}/><span className="hidden sm:inline">Nueva crónica</span></button>}
-        </div>
-      </header>
-
-      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
-        {!campaign ? (
-          <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr] lg:gap-10">
-            <div className="flex flex-col justify-center py-4 lg:py-12">
-              <Eyebrow>Una temporada puede cambiarlo todo</Eyebrow>
-              <h1 className="mt-4 max-w-2xl font-display text-5xl leading-[0.98] tracking-tight sm:text-6xl lg:text-7xl">Reescribe la<br/><span className="text-[#e10600]">historia</span> de la F1.</h1>
-              <p className="mt-6 max-w-xl text-base leading-7 text-[#b7aea2]">Desde los primeros campeonatos de 1950 hasta la nueva era de 2026. Elige un punto de partida, simula cada carrera y descubre cómo habría sido tu propia línea temporal del automovilismo.</p>
-              <div className="mt-8 grid max-w-xl grid-cols-2 gap-3 sm:grid-cols-3">
-                <Stat label="Temporadas" value="77" icon={CalendarDays}/>
-                <Stat label="Equipos históricos" value="60+" icon={Users}/>
-                <Stat label="Simulación" value="Carrera a carrera" icon={Gauge}/>
-              </div>
-            </div>
-            <Panel className="p-5 sm:p-7">
-              <div className="flex items-start justify-between gap-3"><div><Eyebrow>Comenzar una crónica</Eyebrow><h2 className="mt-2 font-display text-3xl">Elige tu temporada</h2></div><span className="rounded-md border border-[#e10600]/30 bg-[#e10600]/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-[#ff716b]">Nueva partida</span></div>
-              <label className="mt-7 block text-xs font-semibold uppercase tracking-[0.13em] text-[#a59b8e]" htmlFor="start-year">Año de inicio</label>
-              <div className="mt-2 flex gap-2">
-                <select id="start-year" value={year} onChange={(event) => setYear(Number(event.target.value))} className="min-w-0 flex-1 rounded-lg border border-white/10 bg-[#12110e] px-4 py-3 text-lg font-semibold text-white outline-none focus:border-[#e10600]">
-                  {YEARS.map((item) => <option key={item} value={item}>{item}</option>)}
-                </select>
-                <button onClick={() => setShowSettings((value) => !value)} aria-expanded={showSettings} className={`grid w-12 place-items-center rounded-lg border transition ${showSettings ? "border-[#e10600] bg-[#e10600]/10 text-[#ff716b]" : "border-white/10 text-[#a59b8e] hover:text-white"}`}><Settings2 size={18}/></button>
-              </div>
-              {showSettings && <div className="mt-4 space-y-3 rounded-lg border border-white/10 bg-black/15 p-4">
-                <p className="text-[10px] font-bold uppercase tracking-[0.17em] text-[#91887d]">Reglas de la crónica</p>
-                <OptionSelect label="Reglamentos" value={options.regs} values={[["historico", "Históricos"], ["alternativo", "Alternativos"]]} onChange={(value) => updateOption("regs", value as Options["regs"])}/>
-                <OptionSelect label="Equipos" value={options.teams} values={[["historico", "Históricos"], ["mercado", "Mercado dinámico"]]} onChange={(value) => updateOption("teams", value as Options["teams"])}/>
-                <OptionSelect label="Pilotos" value={options.drivers} values={[["historico", "Históricos"], ["academia", "Academia y jóvenes"]]} onChange={(value) => updateOption("drivers", value as Options["drivers"])}/>
-                <OptionSelect label="Calendario" value={options.circuits} values={[["real", "Circuitos reales"], ["vivo", "Calendario vivo"]]} onChange={(value) => updateOption("circuits", value as Options["circuits"])}/>
-              </div>}
-              <label className="mt-5 block text-xs font-semibold uppercase tracking-[0.13em] text-[#a59b8e]" htmlFor="seed">Semilla (opcional)</label>
-              <input id="seed" value={seed} onChange={(event) => setSeed(event.target.value)} placeholder="Una palabra o número para fijar resultados" className="mt-2 w-full rounded-lg border border-white/10 bg-[#12110e] px-4 py-3 text-sm text-white outline-none placeholder:text-[#625c54] focus:border-[#e10600]" />
-              <button onClick={() => { setSelectedYear(null); start(year, options, seed); }} className="mt-6 flex w-full items-center justify-center gap-2 rounded-lg bg-[#e10600] px-5 py-4 text-sm font-bold uppercase tracking-[0.13em] text-white transition hover:bg-[#c90000]"><Play size={16} fill="currentColor"/> Crear crónica <ArrowRight size={16}/></button>
-              <p className="mt-4 text-center text-[11px] leading-5 text-[#7f776d]">Tu partida se guarda automáticamente en este navegador. No necesitas crear una cuenta.</p>
-            </Panel>
-          </div>
-        ) : (
-          <div className="space-y-6">
-            <div className="flex flex-wrap items-end justify-between gap-4">
-              <div><Eyebrow>Tu línea temporal · Inicio {campaign.startYear}</Eyebrow><h1 className="mt-2 font-display text-4xl sm:text-5xl">Temporada {pending?.year ?? latest?.year ?? campaign.startYear}</h1><p className="mt-2 text-sm text-[#a59b8e]">Semilla {campaign.seed} · {campaign.options.regs === "historico" ? "Reglamentos históricos" : "Reglamentos alternativos"}</p></div>
-              <div className="flex flex-wrap gap-2"><button onClick={() => setShowSettings((value) => !value)} className="flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs text-[#b9afa2] hover:text-white"><Settings2 size={14}/> Opciones</button></div>
-            </div>
-            {showSettings && <Panel className="grid gap-3 p-4 sm:grid-cols-2"><OptionSelect label="Reglamentos" value={campaign.options.regs} values={[["historico", "Históricos"], ["alternativo", "Alternativos"]]} onChange={(value) => useCronica.getState().setOptions({ ...campaign.options, regs: value as Options["regs"] })}/><OptionSelect label="Equipos" value={campaign.options.teams} values={[["historico", "Históricos"], ["mercado", "Mercado dinámico"]]} onChange={(value) => useCronica.getState().setOptions({ ...campaign.options, teams: value as Options["teams"] })}/></Panel>}
-            {pending ? (
-              <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
-                <Panel className="overflow-hidden">
-                  <div className="border-b border-white/10 p-5 sm:p-6"><Eyebrow>Parrilla y calendario</Eyebrow><div className="mt-2 flex flex-wrap items-end justify-between gap-3"><div><h2 className="font-display text-3xl">{pending.year}</h2><p className="mt-1 text-sm text-[#a59b8e]">{pending.rules.name} · {pending.teams.length} equipos · {pending.drivers.length} pilotos · {pending.races.length} carreras</p></div><span className="rounded-md bg-[#d6ad5d]/10 px-3 py-1.5 text-xs font-semibold text-[#e5c47e]">Pendiente de simular</span></div></div>
-                  <div className="grid gap-0 md:grid-cols-2">
-                    <div className="p-5"><Eyebrow>Equipos participantes</Eyebrow><div className="mt-4 space-y-3">{pending.teams.map((team) => <div key={team.id} className="flex items-center gap-3"><span className="h-8 w-1 rounded-full" style={{ backgroundColor: team.color }}/><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{team.name}</p><p className="truncate text-xs text-[#8e867b]">{team.engineName} · ritmo {team.pace}</p></div><span className="font-mono text-xs text-[#a59b8e]">{team.drivers.length} P</span></div>)}</div></div>
-                    <div className="border-t border-white/10 p-5 md:border-l md:border-t-0"><Eyebrow>Calendario</Eyebrow><div className="mt-4 grid grid-cols-2 gap-2">{pending.races.map((race, index) => <div key={`${race.circuitId}-${index}`} className="rounded-md bg-white/[0.035] px-3 py-2"><p className="text-[10px] text-[#837b70]">R{String(index + 1).padStart(2, "0")}{race.sprint ? " · SPRINT" : ""}</p><p className="mt-0.5 truncate text-xs font-semibold">{race.gp}</p></div>)}</div></div>
-                  </div>
-                  <div className="border-t border-white/10 bg-black/15 p-5 sm:p-6"><div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center"><div><Eyebrow>Todo listo</Eyebrow><p className="mt-1 text-sm text-[#b7aea2]">La simulación es determinista: la misma semilla y temporada producen el mismo resultado.</p></div><button onClick={simulatePending} className="flex shrink-0 items-center justify-center gap-2 rounded-lg bg-[#e10600] px-5 py-3 text-sm font-bold uppercase tracking-wider text-white hover:bg-[#c90000]"><Play size={15} fill="currentColor"/> Simular temporada</button></div></div>
-                </Panel>
-                <div className="space-y-4"><Panel className="p-5"><Eyebrow>Reglamento técnico</Eyebrow><h3 className="mt-2 font-display text-2xl">{pending.rules.name}</h3><p className="mt-3 text-sm leading-6 text-[#b7aea2]">{pending.rules.formula}</p><div className="mt-4 space-y-2 border-t border-white/10 pt-4 text-xs text-[#a59b8e]"><p className="flex justify-between gap-3"><span>Neumáticos</span><strong className="text-white">{pending.rules.tyres}</strong></p><p className="flex justify-between gap-3"><span>Repostajes</span><strong className="text-white">{pending.rules.refuel ? "Permitidos" : "Prohibidos"}</strong></p><p className="flex justify-between gap-3"><span>Safety Car</span><strong className="text-white">{pending.rules.safetyCar ? "Sí" : "No"}</strong></p></div></Panel><Panel className="p-5"><Eyebrow>Notas de temporada</Eyebrow><p className="mt-3 text-sm leading-6 text-[#b7aea2]">{pending.rules.note}</p></Panel></div>
-              </div>
-            ) : activeSeason ? (
-              <div className="space-y-6">
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><Stat label="Campeón del mundo" value={winner?.name ?? "—"} icon={Trophy}/><Stat label="Equipo campeón" value={constructors?.[0]?.name ?? "—"} icon={ShieldCheck}/><Stat label="Grandes premios" value={activeSeason.results.length} icon={Flag}/><Stat label="Pilotos clasificados" value={standings.length} icon={Users}/></div>
-                <Panel className="overflow-hidden"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 p-5"><div><Eyebrow>Resumen de temporada</Eyebrow><h2 className="mt-1 font-display text-3xl">{activeSeason.year} · Resultados</h2></div><div className="flex flex-wrap items-center gap-2">{seasons.length > 1 && <select aria-label="Consultar temporada" value={activeSeason.year} onChange={(event) => setSelectedYear(Number(event.target.value))} className="rounded-md border border-white/10 bg-[#12110e] px-3 py-2 text-xs text-white">{seasons.slice().reverse().map((item) => <option key={item.year} value={item.year}>{item.year}</option>)}</select>}<button onClick={() => reroll(activeSeason.year)} className="flex items-center gap-2 rounded-md border border-white/10 px-3 py-2 text-xs text-[#b9afa2] hover:text-white"><RotateCcw size={13}/> Repetir año</button></div></div>
-                  <div className="grid gap-5 p-5 lg:grid-cols-[1fr_280px]">
-                    <div><Eyebrow>Clasificación de pilotos</Eyebrow><div className="mt-3"><StandingTable season={activeSeason}/></div></div>
-                    <div className="space-y-4"><div className="rounded-lg border border-[#e10600]/25 bg-[#e10600]/[0.07] p-4"><Eyebrow>El campeón</Eyebrow><p className="mt-2 font-display text-3xl">{winner?.name ?? "Sin campeón"}</p><p className="mt-1 text-sm text-[#c0b6a9]">{winner?.teamName ?? ""}</p><div className="mt-4 flex items-end justify-between"><span className="text-xs text-[#a59b8e]">Puntos</span><span className="font-mono text-3xl font-bold">{winner?.points ?? 0}</span></div></div><div className="rounded-lg border border-white/10 bg-white/[0.025] p-4"><Eyebrow>Historia de la temporada</Eyebrow><p className="mt-2 text-sm leading-6 text-[#c0b6a9]">{winner ? `${winner.name} consiguió ${winner.wins} ${winner.wins === 1 ? "victoria" : "victorias"} y ${winner.podiums} podios.` : "No hay resultados disponibles."}</p></div>{constructors && <div><Eyebrow>Constructores</Eyebrow><div className="mt-2"><StandingTable season={activeSeason} constructors/></div></div>}</div>
-                  </div>
-                  <div className="border-t border-white/10 p-5"><Eyebrow>Resultados por carrera</Eyebrow><div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{activeSeason.results.map((race) => { const driver = activeSeason.drivers.find((item) => item.id === race.winnerId); const teamId = race.rows.find((row) => row.driverId === race.winnerId)?.teamId; const team = activeSeason.teams.find((item) => item.id === teamId); return <div key={`${race.round}-${race.circuitId}`} className="flex gap-3 rounded-lg border border-white/8 bg-white/[0.02] p-3"><span className="grid size-9 shrink-0 place-items-center rounded-md bg-white/5 font-mono text-xs text-[#a59b8e]">{String(race.round).padStart(2, "0")}</span><div className="min-w-0 flex-1"><p className="truncate text-[10px] uppercase tracking-wider text-[#81796f]">{race.country} · {race.weather}</p><p className="truncate text-sm font-semibold">{race.gp}</p><p className="mt-1 truncate text-xs text-[#b7aea2]">{driver?.name ?? "Sin ganador"}{team ? ` · ${team.name}` : ""}</p></div><span className="mt-1 h-6 w-1 shrink-0 rounded-full" style={{ backgroundColor: team?.color ?? "#777" }}/></div>; })}</div></div>
-                </Panel>
-                {activeSeason.year === latest?.year && <div className="flex flex-col justify-between gap-4 rounded-xl border border-white/10 bg-[#1b1a18] p-5 sm:flex-row sm:items-center"><div><Eyebrow>El siguiente capítulo</Eyebrow><p className="mt-1 font-display text-2xl">La historia continúa</p><p className="mt-1 text-sm text-[#a59b8e]">Avanza a {activeSeason.year + 1} y deja que evolucione la parrilla.</p></div><button onClick={advance} disabled={activeSeason.year >= LAST_HISTORY + 48} className="flex items-center justify-center gap-2 rounded-lg bg-[#e10600] px-5 py-3 text-sm font-bold uppercase tracking-wider text-white hover:bg-[#c90000] disabled:cursor-not-allowed disabled:opacity-40">Siguiente temporada <ArrowRight size={16}/></button></div>}
-                {seasons.length > 1 && <Panel className="p-4"><div className="flex items-center gap-2"><History size={15} className="text-[#e10600]"/><Eyebrow>Archivo de temporadas</Eyebrow></div><div className="mt-3 flex flex-wrap gap-2">{seasons.map((item) => <button key={item.year} onClick={() => setSelectedYear(item.year)} className={`rounded-md border px-3 py-2 text-xs font-semibold ${activeSeason.year === item.year ? "border-[#e10600] bg-[#e10600]/10 text-white" : "border-white/10 text-[#a59b8e] hover:text-white"}`}>{item.year}</button>)}</div></Panel>}
-              </div>
-            ) : null}
-          </div>
-        )}
-      </div>
-
-      <footer className="mt-10 border-t border-white/8"><div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-2 px-4 py-5 text-[10px] uppercase tracking-[0.13em] text-[#70695f] sm:px-6 lg:px-8"><span>CRÓNICA · Simulador histórico de F1</span><span>Los resultados simulados son una línea temporal alternativa</span></div></footer>
-
-      {confirmReset && <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setConfirmReset(false); }}><div role="dialog" aria-modal="true" aria-labelledby="reset-title" className="w-full max-w-md rounded-xl border border-white/10 bg-[#1b1a18] p-6 shadow-2xl"><div className="flex items-start justify-between"><div><Eyebrow>Reiniciar partida</Eyebrow><h2 id="reset-title" className="mt-2 font-display text-3xl">¿Nueva crónica?</h2></div><button aria-label="Cerrar" onClick={() => setConfirmReset(false)} className="rounded-md p-2 text-[#a59b8e] hover:bg-white/5 hover:text-white"><X size={18}/></button></div><p className="mt-4 text-sm leading-6 text-[#b7aea2]">Se borrará la partida actual guardada en este navegador y podrás empezar en otro año.</p><div className="mt-6 flex justify-end gap-2"><button onClick={() => setConfirmReset(false)} className="rounded-lg border border-white/10 px-4 py-2 text-sm text-[#b9afa2]">Cancelar</button><button onClick={() => { abandon(); setConfirmReset(false); setSelectedYear(null); setShowSettings(false); }} className="rounded-lg bg-[#e10600] px-4 py-2 text-sm font-semibold text-white">Borrar partida</button></div></div></div>}
-    </main>
+    <div className="overflow-x-auto border border-line">
+      <table className="text-center text-sm">
+        <thead>
+          <tr>
+            <th className="sticky left-0 bg-surface px-2 py-2 text-left">Piloto</th>
+            {season.results.map((race) => (
+              <th key={race.round} className="px-1 py-2">
+                <button type="button" className="min-h-11 min-w-11 px-1 text-muted" onClick={() => openRace(race.round)} title={raceTitle(race.gp)}>
+                  {race.round}
+                </button>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.id} className="border-t border-line">
+              <th className="sticky left-0 bg-bg px-2 py-1 text-left font-medium">{row.name}</th>
+              {row.rounds.map((score, index) => (
+                <td key={season.results[index]?.round ?? index} className={`px-1 tabular-nums ${score.pos === 1 ? "bg-surface-2 font-bold" : ""} ${score.pole ? "underline decoration-accent" : ""}`}>
+                  {score.pos ?? "R"}
+                  {score.fl ? "*" : ""}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
-function OptionSelect({ label, value, values, onChange }: { label: string; value: string; values: string[][]; onChange: (value: string) => void }) {
-  return <label className="flex flex-col gap-1.5"><span className="text-[10px] font-semibold uppercase tracking-[0.13em] text-[#a59b8e]">{label}</span><select value={value} onChange={(event) => onChange(event.target.value)} className="rounded-md border border-white/10 bg-[#12110e] px-3 py-2 text-xs text-white outline-none focus:border-[#e10600]">{values.map(([key, text]) => <option key={key} value={key}>{text}</option>)}</select></label>;
+function RaceBrowser({
+  season,
+  numbers,
+  round,
+  setRound,
+}: {
+  season: SimulatedSeason;
+  numbers: Map<string, number>;
+  round: number | null;
+  setRound: (round: number | null) => void;
+}) {
+  const names = new Map(season.drivers.map((driver) => [driver.id, driver.name]));
+  const teams = new Map(season.teams.map((team) => [team.id, team]));
+  return (
+    <div className="flex flex-col gap-2">
+      {season.results.map((race) => {
+        const open = round === race.round;
+        const winner = race.winnerId ? names.get(race.winnerId) : null;
+        return (
+          <article key={race.round} className="border border-line bg-surface">
+            <button type="button" className="flex min-h-11 w-full items-baseline gap-3 px-3 py-3 text-left" onClick={() => setRound(open ? null : race.round)}>
+              <span className="w-8 tabular-nums text-muted">{race.round}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block font-semibold">{raceTitle(race.gp)}</span>
+                <span className="text-sm text-muted">
+                  {race.circuit} · {race.country} · {race.weather}
+                  {race.sprint ? " · Sprint" : ""}
+                  {winner ? ` · ${winner}` : " · Sin ganador"}
+                </span>
+              </span>
+            </button>
+            {open ? (
+              <div className="border-t border-line px-3 py-3">
+                <p>{race.headline}</p>
+                <p className="text-sm text-muted">
+                  {race.laps} vueltas{race.safetyCar ? " · Coche de seguridad" : ""}
+                </p>
+                {race.sprintRows ? (
+                  <div className="mt-4">
+                    <h4 className="mb-2 font-semibold">Sprint</h4>
+                    <ResultTable rows={race.sprintRows} names={names} teams={teams} numbers={numbers} />
+                  </div>
+                ) : null}
+                <div className="mt-4">
+                  <h4 className="mb-2 font-semibold">Carrera</h4>
+                  <ResultTable rows={race.rows} names={names} teams={teams} numbers={numbers} />
+                </div>
+              </div>
+            ) : null}
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
+function ResultTable({
+  rows,
+  names,
+  teams,
+  numbers,
+}: {
+  rows: ClassifiedRow[];
+  names: Map<string, string>;
+  teams: Map<string, { name: string; color: string }>;
+  numbers: Map<string, number>;
+}) {
+  const ordered = rows.slice().sort((a, b) => (a.position ?? 99) - (b.position ?? 99));
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full whitespace-nowrap text-left">
+        <thead className="text-sm uppercase tracking-wide text-muted">
+          <tr>
+            <th className="py-2 pr-3">Pos</th>
+            <th className="py-2 pr-3">Nº</th>
+            <th className="py-2 pr-3">Piloto</th>
+            <th className="py-2 pr-3">Equipo</th>
+            <th className="py-2 pr-3">Parrilla</th>
+            <th className="py-2 pr-3">Vueltas</th>
+            <th className="py-2 pr-3">Tiempo</th>
+            <th className="py-2">Pts</th>
+          </tr>
+        </thead>
+        <tbody>
+          {ordered.map((row) => {
+            const team = teams.get(row.teamId);
+            return (
+              <tr key={row.driverId} className="border-t border-line">
+                <td className="py-2 pr-3 tabular-nums">{row.position ?? "Ret"}</td>
+                <td className="py-2 pr-3 tabular-nums">{numbers.get(row.driverId) ?? "—"}</td>
+                <td className={`py-2 pr-3 ${row.pole ? "font-semibold" : ""}`}>
+                  {names.get(row.driverId) ?? row.driverId}
+                  {row.fastestLap ? <span className="text-muted"> VR</span> : null}
+                </td>
+                <td className="py-2 pr-3">
+                  <span className="mr-2 inline-block h-3 w-1 align-middle" style={{ background: team?.color ?? "transparent" }} />
+                  {team?.name ?? row.teamId}
+                </td>
+                <td className="py-2 pr-3 tabular-nums">{row.grid}</td>
+                <td className="py-2 pr-3 tabular-nums">{row.laps}</td>
+                <td className="py-2 pr-3">{row.position ? row.gap : row.status}</td>
+                <td className="py-2 tabular-nums">{row.points || ""}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
 }

@@ -4,19 +4,12 @@ import viteReact from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { nitro } from "nitro/vite";
 
-/**
- * Standalone Vercel build with only the application and its own assets.
- */
 export default defineConfig(({ command, isPreview }) => ({
   server: {
     host: "0.0.0.0",
-    port: 8080,
-    strictPort: true,
   },
   preview: {
     host: "0.0.0.0",
-    port: 8081,
-    strictPort: true,
   },
   resolve: { tsconfigPaths: true },
   plugins: [

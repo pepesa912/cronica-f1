@@ -31,6 +31,8 @@ export type Options = {
   teams: "historico" | "mercado";
   drivers: "historico" | "academia";
   circuits: "real" | "vivo";
+  signings: "historico" | "simulado";
+  retirements: "historico" | "simulado";
 };
 
 export type DriverState = {
